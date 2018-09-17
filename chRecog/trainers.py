@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import json
 import numpy as np
 import tensorflow as tf
 
@@ -11,11 +12,23 @@ class Trainer(object):
     def __init__(self, model, data_loader, log_path='./logs'):
         self.model = model
         self.data_loader = data_loader
-        self.full_log_path = os.path.abspath(log_path)
-        if not os.path.exists(self.full_log_path):
-            os.mkdir(self.full_log_path)
+        self.full_log_path = os.path.join(
+            os.path.abspath(log_path),
+            'log_%s' % datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
+        )
+        if not os.path.exists(os.path.abspath(log_path)):
+            os.mkdir(os.path.abspath(log_path))
 
     def train(self, params, initialize_model=True):
+
+        print(
+            '[%s] Started for parameters: %s -> %s' %
+            (
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
+                str(params),
+                self.full_log_path
+            )
+        )
 
         tf.set_random_seed(params['random_seed'])
 
@@ -43,7 +56,13 @@ class Trainer(object):
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.name_scope('optimizer'):
             with tf.control_dependencies(update_ops):
-                step = tf.train.AdamOptimizer(params['lr']).minimize(loss)
+                if 'optimizer' in params:
+                    if params['optimizer'] == 'gd':
+                        step = tf.train.GradientDescentOptimizer(params['lr']).minimize(loss)
+                    else:
+                        step = tf.train.AdamOptimizer(params['lr']).minimize(loss)
+                else:
+                    step = tf.train.AdamOptimizer(params['lr']).minimize(loss)
 
         with tf.name_scope('error'):
             correct = tf.equal(tf.argmax(logits, 1), labels)
@@ -54,17 +73,18 @@ class Trainer(object):
         train_writer = tf.summary.FileWriter(
             os.path.join(
                 self.full_log_path,
-                'log_%s/train' % datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
+                'train'
             )
         )
         validate_writer = tf.summary.FileWriter(
             os.path.join(
                 self.full_log_path,
-                'log_%s/validation' % datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
+                'validate'
             )
         )
-        # train_writer.add_graph(tf.get_default_graph())
         validate_writer.add_graph(tf.get_default_graph())
+        with open(os.path.join(self.full_log_path, 'params.json'), 'w') as file:
+            json.dump(params, file)
 
         merged = tf.summary.merge_all()
         config = tf.ConfigProto()
@@ -74,29 +94,13 @@ class Trainer(object):
             if initialize_model:
                 sess.run(tf.global_variables_initializer())
 
-            cumulative_train_batch_idx = 0
+            cumulative_batch_idx = 0
             for epoch_idx in range(params['n_epoch']):
-                print(
-                    '[%s] Epoch %d - Parameters: %s' %
-                    (
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                        epoch_idx,
-                        str(params)
-                    )
-                )
-
                 generators = self.data_loader.reset_batch_generators(params['batch_size'])
                 train_batch_generator, validate_batch_generator, test_batch_generator = generators
-                print(
-                    '[%s] Epoch %d - Training Summary: ' %
-                    (
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                        epoch_idx
-                    ),
-                    end=""
-                )
-                cumulative_train_batch_idx, _, _ = self.epoch(
-                    cumulative_train_batch_idx,
+
+                cumulative_batch_idx, train_loss, train_error_rate = self.epoch(
+                    cumulative_batch_idx,
                     [features, labels, others['keep_prob'], others['is_training']],
                     [step, loss, error, merged],
                     sess,
@@ -104,16 +108,8 @@ class Trainer(object):
                     train_writer,
                     params
                 )
-                print(
-                    '[%s] Epoch %d - Validation Summary: ' %
-                    (
-                        datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
-                        epoch_idx
-                    ),
-                    end=""
-                )
-                self.epoch(
-                    cumulative_train_batch_idx,
+                _, validate_loss, validate_error_rate = self.epoch(
+                    cumulative_batch_idx,
                     [features, labels, others['keep_prob'], others['is_training']],
                     [loss, error, merged],
                     sess,
@@ -122,12 +118,28 @@ class Trainer(object):
                     params
                 )
 
+                print(
+                    '[%s] Epoch %d - Parameters: %s -> %s\n'
+                    'train loss: %f\t train error: %f\t '
+                    'validate loss: %f\t validate error: %f' %
+                    (
+                        datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),
+                        epoch_idx,
+                        str(params),
+                        self.full_log_path,
+                        train_loss,
+                        train_error_rate,
+                        validate_loss,
+                        validate_error_rate
+                    )
+                )
+
     @staticmethod
-    def epoch(acc_batch_idx, placeholders, run_list, session, generator, log_writer, params):
+    def epoch(cum_batch_idx, placeholders, run_list, session, generator, log_writer, params, verbose=False):
         features, labels, keep_prob, is_training = placeholders
         loss_list = list()
         error_list = list()
-        for batch_idx, batch_features, batch_labels in generator:
+        for _, batch_features, batch_labels in generator:
             result = session.run(
                 run_list,
                 feed_dict={
@@ -139,13 +151,14 @@ class Trainer(object):
             )
             loss_list.append(result[-3])
             error_list.append(result[-2])
-            log_writer.add_summary(result[-1], acc_batch_idx)
-            acc_batch_idx += 1
-        print(
-            'loss: %f \t error rate: %s' %
-            (
-                float(np.mean(loss_list)),
-                float(np.mean(error_list))
+            log_writer.add_summary(result[-1], cum_batch_idx)
+            cum_batch_idx += 1
+        if verbose:
+            print(
+                'loss: %f \t error rate: %s' %
+                (
+                    float(np.mean(loss_list)),
+                    float(np.mean(error_list))
+                )
             )
-        )
-        return acc_batch_idx, np.mean(loss_list), np.mean(error_list)
+        return cum_batch_idx, float(np.mean(loss_list)), float(np.mean(error_list))

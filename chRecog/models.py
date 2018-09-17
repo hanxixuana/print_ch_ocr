@@ -35,16 +35,19 @@ def deepnn(x):
         training=is_training
     )
 
+    # x = x - tf.constant(234.0)
+    # x = x / tf.constant(57.0)
+
     # First convolutional layer - maps one grayscale image to 32 feature maps.
     with tf.name_scope('conv1'):
         w_conv1 = weight_variable([8, 8, 3, 32])
         b_conv1 = bias_variable([32])
         h_conv1 = tf.nn.relu(conv2d(x, w_conv1) + b_conv1)
 
-        tf.summary.histogram("w_conv1", w_conv1)
-        tf.summary.histogram("b_conv1", b_conv1)
-        tf.summary.histogram("h_conv1", h_conv1)
-        visualize(w_conv1)
+        # tf.summary.histogram("w_conv1", w_conv1)
+        # tf.summary.histogram("b_conv1", b_conv1)
+        # tf.summary.histogram("h_conv1", h_conv1)
+        # visualize(w_conv1)
 
     # Pooling layer - downsamples by 2X.
     with tf.name_scope('pool1'):
@@ -56,9 +59,9 @@ def deepnn(x):
         b_conv2 = bias_variable([64])
         h_conv2 = tf.nn.relu(conv2d(h_pool1, w_conv2) + b_conv2)
 
-        tf.summary.histogram("w_conv2", w_conv2)
-        tf.summary.histogram("b_conv2", b_conv2)
-        tf.summary.histogram("h_conv2", h_conv2)
+        # tf.summary.histogram("w_conv2", w_conv2)
+        # tf.summary.histogram("b_conv2", b_conv2)
+        # tf.summary.histogram("h_conv2", h_conv2)
 
     # Second pooling layer.
     with tf.name_scope('pool2'):
@@ -91,8 +94,6 @@ def deepnn(x):
         +
         tf.reduce_mean(w_conv2 ** 2.0)
     )
-
-    # y_conv = tf.print(y_conv, [is_training, l2_norm])
 
     return y_conv, {'l2_norm': l2_norm, 'keep_prob': keep_prob, 'is_training': is_training}
 
