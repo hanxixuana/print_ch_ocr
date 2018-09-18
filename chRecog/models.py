@@ -3,6 +3,81 @@
 import numpy as np
 import tensorflow as tf
 
+x = tf.random_normal([4, 90, 90, 3])
+
+
+def all_conv_nn(x, initial_n_feature=64, n_structures=4):
+    # preprocessing
+    with tf.name_scope('preprocessing'):
+        x = tf.cast(x, tf.float32)
+        is_training = tf.placeholder(tf.bool)
+        x = tf.layers.batch_normalization(
+            x,
+            moving_mean_initializer=tf.constant_initializer(234.0),
+            moving_variance_initializer=tf.constant_initializer(3300.0),
+            training=is_training
+        )
+
+    def conv(name, data, kernel_shape, stride, drop_prob):
+        with tf.name_scope(name):
+            weight = tf.Variable(
+                tf.truncated_normal(kernel_shape, stddev=0.01)
+            )
+            bias = tf.Variable(
+                tf.constant(0.01, shape=kernel_shape[-1:])
+            )
+            data = tf.nn.conv2d(
+                data, weight, strides=[1, stride, stride, 1], padding='VALID'
+            )
+            data = tf.nn.leaky_relu(data + bias, alpha=0.1)
+            # data = tf.nn.relu(data + bias)
+            if drop_prob > 0.0:
+                data = tf.nn.dropout(data, 1.0 - drop_prob)
+            weight_l2_norm = tf.reduce_mean(tf.square(weight))
+        # print(data)
+        return data, weight_l2_norm
+
+    def structure(coef):
+        return [
+            [3, [coef, coef + 1], 1, coef / 10.0],
+            [3, [coef + 1, coef + 1], 1, coef / 10.0],
+            [3, [coef + 1, coef + 1], 2, 0.0],
+        ]
+
+    # conv part
+    settings = []
+    for idx in range(n_structures):
+        settings.extend(structure(idx))
+    settings.pop()
+
+    idx = 0
+    l2_norm_list = []
+    for idx, setting in enumerate(settings):
+        x, l2_norm = conv(
+            'conv_%d' % idx,
+            x,
+            [
+                setting[0],
+                setting[0],
+                setting[1][0] * initial_n_feature if setting[1][0] != 0 else 3,
+                setting[1][1] * initial_n_feature
+            ],
+            setting[2],
+            setting[3]
+        )
+        l2_norm_list.append(l2_norm)
+    x, _ = conv(
+        'conv_%d' % (idx + 1),
+        x,
+        [2, 2, settings[-1][1][1] * initial_n_feature, 90],
+        1,
+        n_structures / 10.0
+    )
+    tf.summary.histogram('output', x)
+    total_l2_norm = tf.add_n(l2_norm_list) / len(l2_norm_list)
+    keep_prob = tf.placeholder(tf.float32)      # ignore
+    return x, {'l2_norm': total_l2_norm, 'keep_prob': keep_prob, 'is_training': is_training}
+
 
 def deepnn(x):
 
@@ -90,9 +165,9 @@ def deepnn(x):
         y_conv = tf.matmul(h_fc1_drop, w_fc2) + b_fc2
 
     l2_norm = (
-        tf.reduce_mean(w_conv1 ** 2.0)
+        tf.reduce_mean(tf.square(w_conv1))
         +
-        tf.reduce_mean(w_conv2 ** 2.0)
+        tf.reduce_mean(tf.square(w_conv2))
     )
 
     return y_conv, {'l2_norm': l2_norm, 'keep_prob': keep_prob, 'is_training': is_training}

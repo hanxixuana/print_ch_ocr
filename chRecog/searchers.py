@@ -59,15 +59,15 @@ class GridSearcher(object):
                 self.all_params.append(item)
 
     @staticmethod
-    def start_one_set(params, device_str):
+    def start_one_set(model, params, device_str):
         os.environ['CUDA_VISIBLE_DEVICES'] = device_str
         np.random.seed(params['random_seed'])
         loader = AugOCRSet()
         loader.split_data_into_tvt((0.8, 0.2, 0.0))
-        trainer = Trainer(deepnn, loader)
+        trainer = Trainer(model, loader)
         trainer.train(params)
 
-    def start(self, device_str, keep_prob=1.0):
+    def start(self, model, device_str, keep_prob=1.0):
         self.assemble_params(keep_prob)
 
         pool = multiprocessing.Pool(
@@ -77,7 +77,7 @@ class GridSearcher(object):
 
         for params in self.all_params:
             time.sleep(2.0)
-            pool.apply_async(self.start_one_set, args=(params, device_str))
+            pool.apply_async(self.start_one_set, args=(model, params, device_str))
 
         pool.close()
         pool.join()

@@ -45,6 +45,12 @@ class Trainer(object):
 
         logits, others = self.model(features)
 
+        if len(logits.shape) > 2:
+            with tf.name_scope('logits_reshape'):
+                logits = tf.reshape(
+                    logits, [-1, np.prod(logits.shape[1:])]
+                )
+
         with tf.name_scope('loss'):
             ind_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=labels,
@@ -85,6 +91,8 @@ class Trainer(object):
         validate_writer.add_graph(tf.get_default_graph())
         with open(os.path.join(self.full_log_path, 'params.json'), 'w') as file:
             json.dump(params, file)
+        with open(os.path.join(self.full_log_path, 'model_settings.json'), 'w') as file:
+            json.dump([str(item) for item in tf.trainable_variables()], file)
 
         merged = tf.summary.merge_all()
         config = tf.ConfigProto()
