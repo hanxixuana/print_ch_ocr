@@ -8,7 +8,6 @@ from sklearn.model_selection import ParameterGrid
 from pathos import multiprocessing as multiprocessing
 
 from chRecog.loaders import AugOCRSet
-from chRecog.models import deepnn
 from chRecog.trainers import Trainer
 
 
@@ -64,8 +63,8 @@ class GridSearcher(object):
         np.random.seed(params['random_seed'])
         loader = AugOCRSet()
         loader.split_data_into_tvt((0.8, 0.2, 0.0))
-        trainer = Trainer(model, loader)
-        trainer.train(params)
+        trainer = Trainer(loader)
+        trainer.train(model, params)
 
     def start(self, model, device_str, keep_prob=1.0):
         self.assemble_params(keep_prob)

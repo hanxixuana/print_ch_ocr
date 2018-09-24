@@ -3,180 +3,156 @@
 import numpy as np
 import tensorflow as tf
 
-x = tf.random_normal([4, 90, 90, 3])
 
-
-def all_conv_nn(x, initial_n_feature=64, n_structures=4):
-    # preprocessing
+def head(x, is_training):
     with tf.name_scope('preprocessing'):
         x = tf.cast(x, tf.float32)
-        is_training = tf.placeholder(tf.bool)
         x = tf.layers.batch_normalization(
             x,
             moving_mean_initializer=tf.constant_initializer(234.0),
             moving_variance_initializer=tf.constant_initializer(3300.0),
             training=is_training
         )
-
-    def conv(name, data, kernel_shape, stride, drop_prob):
-        with tf.name_scope(name):
-            weight = tf.Variable(
-                tf.truncated_normal(kernel_shape, stddev=0.01)
-            )
-            bias = tf.Variable(
-                tf.constant(0.01, shape=kernel_shape[-1:])
-            )
-            data = tf.nn.conv2d(
-                data, weight, strides=[1, stride, stride, 1], padding='VALID'
-            )
-            data = tf.nn.leaky_relu(data + bias, alpha=0.1)
-            # data = tf.nn.relu(data + bias)
-            if drop_prob > 0.0:
-                data = tf.nn.dropout(data, 1.0 - drop_prob)
-            weight_l2_norm = tf.reduce_mean(tf.square(weight))
-        # print(data)
-        return data, weight_l2_norm
-
-    def structure(coef):
-        return [
-            [3, [coef, coef + 1], 1, coef / 10.0],
-            [3, [coef + 1, coef + 1], 1, coef / 10.0],
-            [3, [coef + 1, coef + 1], 2, 0.0],
-        ]
-
-    # conv part
-    settings = []
-    for idx in range(n_structures):
-        settings.extend(structure(idx))
-    settings.pop()
-
-    idx = 0
-    l2_norm_list = []
-    for idx, setting in enumerate(settings):
-        x, l2_norm = conv(
-            'conv_%d' % idx,
-            x,
-            [
-                setting[0],
-                setting[0],
-                setting[1][0] * initial_n_feature if setting[1][0] != 0 else 3,
-                setting[1][1] * initial_n_feature
-            ],
-            setting[2],
-            setting[3]
-        )
-        l2_norm_list.append(l2_norm)
-    x, _ = conv(
-        'conv_%d' % (idx + 1),
-        x,
-        [2, 2, settings[-1][1][1] * initial_n_feature, 90],
-        1,
-        n_structures / 10.0
-    )
-    tf.summary.histogram('output', x)
-    total_l2_norm = tf.add_n(l2_norm_list) / len(l2_norm_list)
-    keep_prob = tf.placeholder(tf.float32)      # ignore
-    return x, {'l2_norm': total_l2_norm, 'keep_prob': keep_prob, 'is_training': is_training}
+    return x
 
 
-def deepnn(x):
-
-    def conv2d(x, w):
-        """conv2d returns a 2d convolution layer with full stride."""
-        return tf.nn.conv2d(x, w, strides=[1, 1, 1, 1], padding='SAME')
-
-    def max_pool_3x3(x):
-        """max_pool_3x3 downsamples a feature map by 3X."""
-        return tf.nn.max_pool(x, ksize=[1, 3, 3, 1],
-                              strides=[1, 3, 3, 1], padding='SAME')
-
-    def weight_variable(shape):
-        """weight_variable generates a weight variable of a given shape."""
-        initial = tf.truncated_normal(shape, stddev=0.1)
+def weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev=0.01)
+    if tf.executing_eagerly():
+        return initial
+    else:
         return tf.Variable(initial)
 
-    def bias_variable(shape):
-        """bias_variable generates a bias variable of a given shape."""
-        initial = tf.constant(0.1, shape=shape)
+
+def bias_variable(shape):
+    initial = tf.constant(0.1, shape=shape)
+    if tf.executing_eagerly():
+        return initial
+    else:
         return tf.Variable(initial)
 
-    x = tf.cast(x, tf.float32)
 
-    is_training = tf.placeholder(tf.bool)
-    x = tf.layers.batch_normalization(
-        x,
-        moving_mean_initializer=tf.constant_initializer(234.0),
-        moving_variance_initializer=tf.constant_initializer(3300.0),
-        training=is_training
+def conv2d(indata, w, padding='SAME'):
+    return tf.nn.conv2d(
+        indata,
+        w,
+        strides=[1, 1, 1, 1],
+        padding=padding
     )
 
-    # x = x - tf.constant(234.0)
-    # x = x / tf.constant(57.0)
 
-    # First convolutional layer - maps one grayscale image to 32 feature maps.
-    with tf.name_scope('conv1'):
-        w_conv1 = weight_variable([8, 8, 3, 32])
-        b_conv1 = bias_variable([32])
-        h_conv1 = tf.nn.relu(conv2d(x, w_conv1) + b_conv1)
-
-        # tf.summary.histogram("w_conv1", w_conv1)
-        # tf.summary.histogram("b_conv1", b_conv1)
-        # tf.summary.histogram("h_conv1", h_conv1)
-        # visualize(w_conv1)
-
-    # Pooling layer - downsamples by 2X.
-    with tf.name_scope('pool1'):
-        h_pool1 = max_pool_3x3(h_conv1)
-
-    # Second convolutional layer -- maps 32 feature maps to 64.
-    with tf.name_scope('conv2'):
-        w_conv2 = weight_variable([8, 8, 32, 64])
-        b_conv2 = bias_variable([64])
-        h_conv2 = tf.nn.relu(conv2d(h_pool1, w_conv2) + b_conv2)
-
-        # tf.summary.histogram("w_conv2", w_conv2)
-        # tf.summary.histogram("b_conv2", b_conv2)
-        # tf.summary.histogram("h_conv2", h_conv2)
-
-    # Second pooling layer.
-    with tf.name_scope('pool2'):
-        h_pool2 = max_pool_3x3(h_conv2)
-
-    # Fully connected layer 1 -- after 2 round of downsampling, our 28x28 image
-    # is down to 7x7x64 feature maps -- maps this to 1024 features.
-    with tf.name_scope('fc1'):
-        w_fc1 = weight_variable([np.prod(h_pool2.shape[1:]).value, 2056])
-        b_fc1 = bias_variable([2056])
-
-        h_pool2_flat = tf.reshape(h_pool2, [-1, np.prod(h_pool2.shape[1:])])
-        h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, w_fc1) + b_fc1)
-
-    # Dropout - controls the complexity of the model, prevents co-adaptation of
-    # features.
-    with tf.name_scope('dropout'):
-        keep_prob = tf.placeholder(tf.float32)
-        h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
-
-    # Map the 1024 features to 10 classes, one for each digit
-    with tf.name_scope('fc2'):
-        w_fc2 = weight_variable([2056, 90])
-        b_fc2 = bias_variable([90])
-
-        y_conv = tf.matmul(h_fc1_drop, w_fc2) + b_fc2
-
-    l2_norm = (
-        tf.reduce_mean(tf.square(w_conv1))
-        +
-        tf.reduce_mean(tf.square(w_conv2))
+def max_pooling(indata, psize=3, stride=3, padding='SAME'):
+    return tf.nn.max_pool(
+        indata,
+        ksize=[1, psize, psize, 1],
+        strides=[1, stride, stride, 1],
+        padding=padding
     )
 
-    return y_conv, {'l2_norm': l2_norm, 'keep_prob': keep_prob, 'is_training': is_training}
 
-
-def visualize(kernel):
+def visualize(idx, kernel):
     with tf.variable_scope('visualization'):
         x_min = tf.reduce_min(kernel)
         x_max = tf.reduce_max(kernel)
         kernel_0_to_1 = (kernel - x_min) / (x_max - x_min)
         kernel_transposed = tf.transpose(kernel_0_to_1, [3, 0, 1, 2])
-        tf.summary.image('filters', kernel_transposed, max_outputs=16)
+        tf.summary.image('layer_%d' % idx, kernel_transposed, max_outputs=64)
+
+
+def conv_part(idx, indata, height_k_size, width_k_size, in_size, out_size, show_visualization,
+              p_stride=3, padding='SAME', keep_prob=None, l2_norm_collector=None):
+    with tf.name_scope('conv_%d' % idx):
+        if keep_prob is not None:
+            with tf.name_scope('dropout'):
+                indata = tf.nn.dropout(indata, keep_prob)
+        w_conv = weight_variable([height_k_size, width_k_size, in_size, out_size])
+        b_conv = bias_variable([out_size])
+        h_conv = tf.nn.relu(conv2d(indata, w_conv, padding=padding) + b_conv)
+        if show_visualization:
+            visualize(idx, w_conv)
+    with tf.name_scope('pool'):
+        h_pool = max_pooling(h_conv, stride=p_stride, padding=padding)
+    if l2_norm_collector is not None:
+        l2_norm_collector.append(
+            tf.reduce_mean(
+                tf.square(w_conv)
+            )
+        )
+    return h_pool
+
+
+def conv_fc_part(idx, indata, height_k_size, width_k_size, in_size, out_size, activation, keep_prob=None):
+    with tf.name_scope('conv_fc_%d' % idx):
+        if keep_prob is not None:
+            with tf.name_scope('dropout'):
+                indata = tf.nn.dropout(indata, keep_prob)
+        w_fc = weight_variable([height_k_size, width_k_size, in_size, out_size])
+        b_fc = bias_variable([out_size])
+        if activation == 'relu':
+            h_fc = tf.nn.relu(conv2d(indata, w_fc, padding='VALID') + b_fc)
+        elif activation == 'sigmoid':
+            h_fc = tf.nn.sigmoid(conv2d(indata, w_fc, padding='VALID') + b_fc)
+        else:
+            h_fc = conv2d(indata, w_fc, padding='VALID') + b_fc
+    return h_fc
+
+
+def fcn(node, is_training=None, keep_prob=None):
+    if is_training is None:
+        is_training = False
+    if keep_prob is None:
+        keep_prob = 0.85
+
+    node = head(node, is_training)
+
+    l2_norm_list = list()
+
+    if tf.executing_eagerly():
+        node = conv_part(
+            1, node, height_k_size=12, width_k_size=8, in_size=3, out_size=64, p_stride=3,
+            show_visualization=False, l2_norm_collector=l2_norm_list, keep_prob=None
+        )
+    else:
+        node = conv_part(
+            1, node, height_k_size=12, width_k_size=8, in_size=3, out_size=64, p_stride=3,
+            show_visualization=True, l2_norm_collector=l2_norm_list, keep_prob=None
+        )
+
+    node = conv_part(
+        2, node, height_k_size=8, width_k_size=6, in_size=64, out_size=96, p_stride=2,
+        show_visualization=False, l2_norm_collector=l2_norm_list, keep_prob=keep_prob
+    )
+
+    node = conv_part(
+        3, node, height_k_size=6, width_k_size=4, in_size=96, out_size=128, p_stride=2,
+        show_visualization=False, l2_norm_collector=l2_norm_list, keep_prob=keep_prob
+    )
+
+    node = conv_fc_part(
+        1, node, height_k_size=6, width_k_size=3, in_size=128, out_size=1024,
+        activation='relu', keep_prob=keep_prob
+    )
+
+    node = conv_fc_part(
+        1, node, height_k_size=1, width_k_size=1, in_size=1024, out_size=512,
+        activation='relu', keep_prob=keep_prob
+    )
+
+    node = conv_fc_part(
+        2, node, height_k_size=1, width_k_size=1, in_size=512, out_size=90,
+        activation='no', keep_prob=None
+    )
+
+    total_l2_norm = tf.add_n(l2_norm_list) / float(len(l2_norm_list))
+
+    return node, {'l2_norm': total_l2_norm}
+
+
+if __name__ == '__main__':
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+    tf.enable_eager_execution()
+    # data = tf.random_normal([4, 360, 360, 3])
+    data = tf.random_normal([4, 64, 32, 3])
+    node = data
+    o, _ = fcn(data)

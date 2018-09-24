@@ -5,12 +5,13 @@ import json
 import h5py
 import numpy as np
 
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+from datetime import datetime
+from sklearn.model_selection import train_test_split
 
 
 class AugOCRSet(object):
-    def __init__(self, path_to_img_set='D:\\datasets\\augmented_ocr_8\\softly_augmented_imgs\\processed_data'):
+    def __init__(self, path_to_img_set='D:\\datasets\\augmented_ocr_8\\tiny_augmented_imgs\\processed_data'):
         """
 
         import os
@@ -60,6 +61,56 @@ class AugOCRSet(object):
         self.validate_batch_generator = list()
         self.test_batch_generator = list()
 
+    def get_random_samples(self, number):
+        samples = list()
+        labels = list()
+        all_labels = list(self.char_to_label_mapper.keys())
+        for idx in range(number):
+            label = np.random.choice(all_labels, 1)[0]
+            labels.append(label)
+            samples.append(
+                self.get_samples(
+                    label,
+                    1
+                )
+            )
+        samples = np.concatenate(samples)
+        return samples, labels
+
+    def get_random_string(self, number):
+        samples, labels = self.get_random_samples(number)
+        raise NotImplementedError
+
+    def get_samples(self, character, number):
+        try:
+            data_set_key_list = list(self.char_to_h5_mapper[character].keys())
+        except KeyError:
+            raise KeyError(
+                '[%s] Character %s is not contained in the data set.' %
+                (
+                    datetime.now().strftime('%Y-%m-%D %H:%M:%S.%F'),
+                    character
+                )
+            )
+        data_set_key_list.remove('label')
+        if number > len(data_set_key_list):
+            raise ValueError(
+                '[%s] Cannot get %d samples, because there are only %d of %s.' %
+                (
+                    datetime.now().strftime('%Y-%m-%D %H:%M:%S.%F'),
+                    number,
+                    len(data_set_key_list),
+                    character
+                )
+            )
+        result = list()
+        for key in np.random.choice(data_set_key_list, number, replace=False):
+            result.append(
+                self.char_to_h5_mapper[character][key][:]
+            )
+        result = np.stack(result, axis=0)
+        return result
+
     def get_img_shape(self):
         return (
             self.char_to_h5_mapper[list(self.char_to_label_mapper.keys())[0]]['0'][:].shape
@@ -77,10 +128,12 @@ class AugOCRSet(object):
             data_set_key_list = list(self.char_to_h5_mapper[character].keys())
             data_set_key_list.remove('label')
             train_and_validate, test_set_key_list = train_test_split(
-                data_set_key_list, test_size=tvt_propositions[2]
+                data_set_key_list,
+                test_size=tvt_propositions[2]
             )
             train_set_key_list, validate_set_list = train_test_split(
-                train_and_validate, test_size=tvt_propositions[1]
+                train_and_validate,
+                test_size=tvt_propositions[1]
             )
             self.train_sample_idx_list.extend(
                 [(character, item) for item in train_set_key_list]
@@ -97,7 +150,7 @@ class AugOCRSet(object):
         n_idx = len(idx_list)
         n_batch = int(n_idx / batch_size)
         for batch_idx in range(n_batch):
-            batch_idx_list = idx_list[batch_idx:(batch_idx+batch_size)]
+            batch_idx_list = idx_list[(batch_idx * batch_size):(batch_idx * batch_size + batch_size)]
             batch_img_list = list()
             batch_label_list = list()
             for character, h5_ds_idx in batch_idx_list:

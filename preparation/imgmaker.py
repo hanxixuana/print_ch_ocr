@@ -17,12 +17,13 @@ from preparation.augmentation import soft_seq
 
 
 class DataSet(object):
-    full_path_of_root_folder = 'D:\\datasets\\all_raw_ocr'
-    sub_folders = (
-        'B1', 'B10', 'B11', 'B12', 'B13', 'B17', 'B18', 'B19', 'B2', 'B20', 'B21', 'B22', 'B26',
-        'B27', 'B29', 'B3', 'B30', 'B31', 'B32', 'B35', 'B4', 'B42', 'B5', 'B6', 'B7', 'B8', 'B9'
-    )
-    # sub_folders = ['B26', 'B27', 'B29', 'B30', 'B31', 'B32', 'B35', 'B42']
+    # full_path_of_root_folder = 'D:\\datasets\\all_raw_ocr'
+    full_path_of_root_folder = 'D:\\datasets\\raw_ocr'
+    # sub_folders = (
+    #     'B1', 'B10', 'B11', 'B12', 'B13', 'B17', 'B18', 'B19', 'B2', 'B20', 'B21', 'B22', 'B26',
+    #     'B27', 'B29', 'B3', 'B30', 'B31', 'B32', 'B35', 'B4', 'B42', 'B5', 'B6', 'B7', 'B8', 'B9'
+    # )
+    sub_folders = ['B26', 'B27', 'B29', 'B30', 'B31', 'B32', 'B35', 'B42']
 
     def __init__(self):
         self.__full_paths_of_sub_folders = [
@@ -189,6 +190,8 @@ class DataSet(object):
         self.correct = self.table[
             (
                     self.table['textno'].notnull()
+                    &
+                    self.table['label'].notnull()
             )
         ]
         return self.img, self.table
@@ -200,6 +203,8 @@ class DataSet(object):
                     self.correct = self.table[
                         (
                             self.table['textno'].notnull()
+                            &
+                            self.table['label'].notnull()
                         )
                     ]
                     return len(self.correct)
@@ -220,6 +225,8 @@ class DataSet(object):
                 self.correct = self.table[
                     (
                         self.table['textno'].notnull()
+                        &
+                        self.table['label'].notnull()
                     )
                 ]
             left, top, width, height = (
@@ -375,7 +382,7 @@ class DataSet(object):
             )
             return dict()
 
-        gray = cv2.cvtColor(img[:, :, [2, 1, 0]], cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         gray = cv2.bitwise_not(gray)
         gray = cv2.adaptiveThreshold(gray, gray.max(), cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 0)
 
@@ -475,6 +482,10 @@ class DataSet(object):
                     for key in self.total_result
                 ]
             )
+        self.total_result[' '] = [
+            np.ones([max_height, max_width, 3], dtype='uint8') * 255
+        ]
+        self.total_result.pop('©', None)
 
         for key in tqdm(self.total_result):
             for idx, img in enumerate(self.total_result[key]):
@@ -502,6 +513,7 @@ class DataSet(object):
                 down_padding_length = int(max_height - up_padding_length - temp.shape[0])
                 left_padding_length = int((max_width - temp.shape[1]) / 2)
                 right_padding_length = int(max_width - left_padding_length - temp.shape[1])
+
                 self.total_result[key][idx] = cv2.copyMakeBorder(
                     temp,
                     up_padding_length,
@@ -520,7 +532,7 @@ class DataSet(object):
         if not os.path.exists('./processed_data'):
             os.makedirs('./processed_data')
 
-        self.data_augmentation()
+        self.data_augmentation(total_n_img_per_class_coef=1.2)
         self.save_raw_data()
 
         return self.total_result
@@ -539,10 +551,14 @@ class DataSet(object):
             )
         )
 
-    def data_augmentation(self):
-        max_n_img_per_char = max(
-            len(self.total_result[key])
-            for key in self.total_result
+    def data_augmentation(self, total_n_img_per_class_coef=1.0):
+        max_n_img_per_char = int(
+                max(
+                    len(self.total_result[key])
+                    for key in self.total_result
+                )
+                *
+                total_n_img_per_class_coef
         )
 
         def do(label, current_img_list, max_n_img):
@@ -641,7 +657,7 @@ class ImgSet(object):
     def __init__(self, path_to_img_set):
         """
 
-        ds = ImgSet('D:/datasets/augmented_ocr_8/softly_augmented_imgs')
+        ds = ImgSet('./processed_data')
         ds.save_n_squared_samples_for_all_chars()
 
         """
@@ -663,7 +679,7 @@ class ImgSet(object):
     def show_n_squared_of_char(self, character, vertical_n_per_char, horizontal_n_per_char, figsize=(16, 12), show_img=True):
         img_idx_list = list(
             np.random.choice(
-                len(self.char_to_h5_mapper[character]),
+                len(self.char_to_h5_mapper[character]) - 1,
                 min([vertical_n_per_char*horizontal_n_per_char, len(self.char_to_h5_mapper[character])]),
                 replace=False
             )
