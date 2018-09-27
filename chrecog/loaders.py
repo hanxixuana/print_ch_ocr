@@ -79,7 +79,8 @@ class AugOCRSet(object):
 
     def get_random_string(self, number):
         samples, labels = self.get_random_samples(number)
-        raise NotImplementedError
+        samples = np.hstack([item[0] for item in np.split(samples, indices_or_sections=samples.shape[0])])
+        return samples, labels
 
     def get_samples(self, character, number):
         try:

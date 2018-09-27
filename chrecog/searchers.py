@@ -7,8 +7,8 @@ import numpy as np
 from sklearn.model_selection import ParameterGrid
 from pathos import multiprocessing as multiprocessing
 
-from chRecog.loaders import AugOCRSet
-from chRecog.trainers import Trainer
+from chrecog.loaders import AugOCRSet
+from chrecog.trainers import ConvNetTrainer
 
 
 class GridSearcher(object):
@@ -63,8 +63,9 @@ class GridSearcher(object):
         np.random.seed(params['random_seed'])
         loader = AugOCRSet()
         loader.split_data_into_tvt((0.8, 0.2, 0.0))
-        trainer = Trainer(loader)
-        trainer.train(model, params)
+        trainer = ConvNetTrainer(loader)
+        trainer.configure(model, params)
+        trainer.train()
 
     def start(self, model, device_str, keep_prob=1.0):
         self.assemble_params(keep_prob)
@@ -74,9 +75,15 @@ class GridSearcher(object):
             maxtasksperchild=1
         )
 
+        results = list()
         for params in self.all_params:
             time.sleep(2.0)
-            pool.apply_async(self.start_one_set, args=(model, params, device_str))
+            results.append(
+                pool.apply_async(self.start_one_set, args=(model, params, device_str))
+            )
 
         pool.close()
         pool.join()
+
+        for result in results:
+            result.get()
