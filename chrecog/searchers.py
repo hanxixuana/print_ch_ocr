@@ -7,8 +7,8 @@ import numpy as np
 from sklearn.model_selection import ParameterGrid
 from pathos import multiprocessing as multiprocessing
 
-from chrecog.loaders import AugOCRSet
-from chrecog.trainers import ConvNetTrainer
+from chrecog.loaders import WordsSet, AugOCRSet
+from chrecog.trainers import ConvNetTrainer, CTCNetTrainer
 
 
 class GridSearcher(object):
@@ -61,17 +61,35 @@ class GridSearcher(object):
     def start_one_set(model, params, device_str):
         os.environ['CUDA_VISIBLE_DEVICES'] = device_str
         np.random.seed(params['random_seed'])
-        loader = AugOCRSet()
-        loader.split_data_into_tvt((0.8, 0.2, 0.0))
-        trainer = ConvNetTrainer(loader)
-        trainer.configure(model, params)
-        trainer.train()
+
+        # loader = AugOCRSet()
+        # loader.split_data_into_tvt((0.8, 0.2, 0.0))
+        # trainer = ConvNetTrainer(loader)
+        # trainer.train(model, params)
+
+        loader = WordsSet()
+        height, width, _ = loader.get_img_shape()
+        char_list = loader.get_characters()
+        loader.split_data_into_tvt((0.8, 0.2, 0.0), load_to_memory=True)
+        # loader.split_data_into_tvt((0.8, 0.2, 0.0), load_to_memory=False)
+
+        instance = model(height, width, char_list, params['max_text_len'], params['decoder_type'])
+
+        params['img_height'] = height
+        params['img_width'] = width
+        params['char_list'] = char_list
+
+        trainer = CTCNetTrainer(loader)
+        trainer.train(
+            instance.forward, params
+        )
 
     def start(self, model, device_str, keep_prob=1.0):
         self.assemble_params(keep_prob)
 
         pool = multiprocessing.Pool(
-            processes=multiprocessing.cpu_count() - 1,
+            # processes=multiprocessing.cpu_count() - 1,
+            processes=2,
             maxtasksperchild=1
         )
 

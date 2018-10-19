@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
+from copy import deepcopy
 from pandas.errors import ParserError
 from datetime import datetime
 import pathos.pools as pp
@@ -16,7 +17,578 @@ import pathos.pools as pp
 from preparation.augmentation import soft_seq
 
 
-class DataSet(object):
+class WordDataSet(object):
+    full_path_of_root_folder = 'D:\\datasets\\all_raw_ocr'
+    # full_path_of_root_folder = 'D:\\datasets\\raw_ocr'
+
+    sub_folders = [item for item in os.listdir(full_path_of_root_folder) if len(item) == 3]
+    # sub_folders = ['B26', 'B27', 'B29', 'B30', 'B31', 'B32', 'B35', 'B42']
+
+    def __init__(self):
+        self.__full_paths_of_sub_folders = [
+            os.path.join(self.full_path_of_root_folder, sub_folder)
+            for sub_folder in self.sub_folders
+        ]
+        self.__current_sub_folder = None
+        self.__full_path_of_current_sub_folder = None
+
+        self.__orgbox_images = list()
+        self.__original_images = list()
+        self.__orgbox_csvs = list()
+
+        self.full_path_of_current_orgbox_image = None
+        self.full_path_of_current_original_image = None
+        self.full_path_of_current_csv = None
+
+        self.img = None
+        self.orig_img = None
+        self.table = None
+        self.correct = None
+
+        self.total_result = dict()
+        self.img_count_before_augmentation = dict()
+
+    def full_paths_of_sub_folders(self):
+        return self.__full_paths_of_sub_folders
+
+    def total_n_of_sub_folders(self):
+        return len(self.sub_folders)
+
+    def get_sub_folder(self, idx):
+        self.__current_sub_folder = self.sub_folders[idx]
+        self.__full_path_of_current_sub_folder = os.path.join(
+            self.full_path_of_root_folder, self.__current_sub_folder
+        )
+        self.__orgbox_images = [
+            os.path.join(self.__full_path_of_current_sub_folder, path)
+            for path in os.listdir(self.__full_path_of_current_sub_folder)
+            if path[:7] == 'orgbox-'
+        ]
+        self.__orgbox_csvs = [
+            os.path.join(self.__full_path_of_current_sub_folder, path)
+            for path in os.listdir(self.__full_path_of_current_sub_folder)
+            if path[:4] == 'out-'
+        ]
+        self.__original_images = [
+            os.path.join(self.__full_path_of_current_sub_folder, ('org-' + path[4:]).replace('csv', 'png'))
+            for path in os.listdir(self.__full_path_of_current_sub_folder)
+            if path[:4] == 'out-'
+        ]
+        return self.__orgbox_images, self.__orgbox_csvs
+
+    def total_n_of_orgbox_images_and_csvs(self):
+        if (
+                (len(self.__orgbox_csvs) != len(self.__orgbox_images))
+                or
+                (len(self.__orgbox_csvs) != len(self.__original_images))
+        ):
+            raise ValueError(
+                '%s Number of orgbox images %d != that of out csvs %d != that of original images %d.' %
+                (
+                    self.__full_path_of_current_sub_folder,
+                    len(self.__orgbox_images),
+                    len(self.__orgbox_csvs),
+                    len(self.__original_images)
+                )
+            )
+        else:
+            return len(self.__orgbox_csvs)
+
+    @staticmethod
+    def find_nth_occurence(haystack, needle, n):
+        parts = haystack.split(needle, n + 1)
+        if len(parts) <= n + 1:
+            return -1
+        return len(haystack) - len(parts[-1]) - len(needle)
+
+    def remove_nth_char(self, haystack, ch, n):
+        where = self.find_nth_occurence(
+            haystack, ch, n
+        )
+        return (
+                haystack[:where]
+                +
+                haystack[(where+1):]
+        )
+
+    def get_an_orgbox_image_and_csv(self, idx):
+        self.full_path_of_current_orgbox_image = self.__orgbox_images[idx]
+        self.full_path_of_current_original_image = self.__original_images[idx]
+        self.full_path_of_current_csv = self.__orgbox_csvs[idx]
+
+        self.img = cv2.imread(self.full_path_of_current_orgbox_image)
+        self.orig_img = cv2.imread(self.full_path_of_current_original_image)
+        try:
+            self.table = pd.read_csv(self.full_path_of_current_csv, sep=',')
+        except ParserError as error:
+            print(
+                'Cannot read the csv %s in its current status: %s '
+                'Trying to decorate it and reopen it.' %
+                (
+                    self.full_path_of_current_csv,
+                    error
+                )
+            )
+            raise error
+            # with open(self.full_path_of_current_csv, 'r') as file:
+            #
+            #     file = open(self.full_path_of_current_csv, 'r', encoding='utf-8-sig')
+            #     text_list = file.read().split('\n')
+            #     start_comma_idx = text_list[0].split(',').index('conf')
+            #
+            #     for idx, text in enumerate(text_list):
+            #         idx = 6
+            #         text = text_list[idx]
+            #         if len(text) > 0:
+            #             text_start_idx = self.find_nth_occurence(text, ',', start_comma_idx) + 1
+            #             text_end_idx = len(text) - text[::-1].index(',') - 1
+            #             text_of_interest = text[text_start_idx:text_end_idx]
+            #             if text_of_interest.count(',') > 3:
+            #                 del text_list[idx]
+            #             elif text_of_interest.count(',') == 2:
+            #                 text_of_interest_len_list = [
+            #                     len(item) for item in text_of_interest.split(',')
+            #                 ]
+            #                 left_two_len = (
+            #                         text_of_interest_len_list[0]
+            #                         +
+            #                         text_of_interest_len_list[1]
+            #                 )
+            #                 right_two_len = (
+            #                         text_of_interest_len_list[1]
+            #                         +
+            #                         text_of_interest_len_list[2]
+            #                 )
+            #                 if left_two_len >= text_of_interest_len_list[2]:
+            #                     if left_two_len - text_of_interest_len_list[2] <= 2:
+            #                         text_list[idx] = (
+            #                                 text_list[idx][:text_start_idx]
+            #                                 +
+            #                                 self.remove_nth_char(text_of_interest, ',', 1)
+            #                                 +
+            #                                 text_list[idx][text_end_idx:]
+            #                         )
+            #                     else:
+            #                         del text_list[idx]
+            #                 elif right_two_len >= text_of_interest_len_list[0]:
+            #                     if right_two_len - text_of_interest_len_list[0] <= 2:
+            #                         text_list[idx] = (
+            #                                 text_list[idx][:text_start_idx]
+            #                                 +
+            #                                 self.remove_nth_char(text_of_interest, ',', 0)
+            #                                 +
+            #                                 text_list[idx][text_end_idx:]
+            #                         )
+            #                     else:
+            #                         del text_list[idx]
+            #                 else:
+            #                     # should never reach here
+            #                     del text_list[idx]
+
+        if len(self.table.keys()) == 1:
+            self.table = pd.read_csv(self.full_path_of_current_csv, sep=';')
+        self.correct = self.table[
+            (
+                    self.table['textno'].notnull()
+                    &
+                    self.table['label'].notnull()
+            )
+        ]
+        return self.img, self.table
+
+    def get_total_n_of_boxes(self, only_use_correct_ones=True):
+        if only_use_correct_ones:
+            if self.correct is None:
+                if self.table is not None:
+                    self.correct = self.table[
+                        (
+                                self.table['textno'].notnull()
+                                &
+                                self.table['label'].notnull()
+                        )
+                    ]
+                    return len(self.correct)
+                else:
+                    return 0
+            else:
+                return len(self.correct)
+        else:
+            return (
+                len(self.table)
+                if self.table is not None
+                else 0
+            )
+
+    def get_a_box_and_title(self, idx, only_use_correct_ones=True, show_img=False):
+        if only_use_correct_ones:
+            if self.correct is None:
+                self.correct = self.table[
+                    (
+                            self.table['textno'].notnull()
+                            &
+                            self.table['label'].notnull()
+                    )
+                ]
+            left, top, width, height = (
+                self.correct[
+                    ['left', 'top', 'width', 'height']
+                ].iloc[idx]
+            )
+            text, label = (
+                self.correct[
+                    ['text', 'label']
+                ].iloc[idx]
+            )
+            cropped_image = self.orig_img[top:(top + height), left:(left + width)]
+        else:
+            left, top, width, height = (
+                self.table[
+                    ['left', 'top', 'width', 'height']
+                ].iloc[idx]
+            )
+            text, label = (
+                self.table[
+                    ['text', 'label']
+                ].iloc[idx]
+            )
+            cropped_image = self.orig_img[top:(top + height), left:(left + width)]
+        if show_img:
+            fig = plt.figure()
+            plt.imshow(cropped_image)
+            fig.suptitle('text: %s - label: %s' % (text, label))
+            fig.show()
+        return cropped_image, text, label
+
+    def show_n_squared_of_boxes(self, n, figsize=(16, 12), only_use_correct_ones=True):
+        img_idx_list = np.random.randint(
+            0, self.get_total_n_of_boxes(only_use_correct_ones=only_use_correct_ones), n ** 2
+        )
+        fig = plt.figure(figsize=figsize)
+        axes = fig.subplots(nrows=n, ncols=n)
+        for row_idx, row in enumerate(axes):
+            for col_idx, ax in enumerate(row):
+                img, text, label = self.get_a_box_and_title(
+                    img_idx_list[col_idx + row_idx * n],
+                    only_use_correct_ones=only_use_correct_ones
+                )
+                ax.imshow(img)
+                if only_use_correct_ones:
+                    ax.set_title(
+                        'textno: %d text: %s label: %s' %
+                        (
+                            self.correct['textno'].iloc[img_idx_list[col_idx + row_idx * n]],
+                            text,
+                            label
+                        )
+                    )
+                else:
+                    ax.set_title(
+                        'textno: %d text: %s label: %s' %
+                        (
+                            self.table['textno'][img_idx_list[col_idx + row_idx * n]],
+                            text,
+                            label
+                        )
+                    )
+        fig.suptitle(
+            self.full_path_of_current_orgbox_image
+            +
+            '\n'
+            +
+            self.full_path_of_current_original_image
+            +
+            '\n'
+            +
+            self.full_path_of_current_csv
+        )
+        fig.show()
+
+    def get_a_box_and_title_by_textno(self, textno, show_img=False):
+        index_series = self.table['textno'] == textno
+        left, top, width, height = (
+            self.table[index_series][
+                ['left', 'top', 'width', 'height']
+            ].iloc[0]
+        )
+        text, label = (
+            self.table[index_series][
+                ['text', 'label']
+            ].iloc[0]
+        )
+        cropped_image = self.orig_img[top:(top + height), left:(left + width)]
+        if show_img:
+            fig = plt.figure()
+            plt.imshow(cropped_image)
+            fig.suptitle('text: %s - label: %s' % (text, label))
+            fig.show()
+        return cropped_image, text, label
+
+    def split_all_correct_boxes(self, img_idx):
+        img_list = list()
+        label_list = list()
+        self.get_an_orgbox_image_and_csv(img_idx)
+        for idx in range(self.get_total_n_of_boxes()):
+            img, _, label = self.get_a_box_and_title(idx)
+
+            if (
+                    (
+                            img.shape[0] > 500
+                            and
+                            img.shape[1] > 500
+                    )
+                    or
+                    img.shape[0] == 0
+                    or
+                    img.shape[1] == 0
+            ):
+                print(
+                    '===========\n'
+                    '%s\n%s\n%s\n%s\n%s\n'
+                    '===========\n' %
+                    (
+                        self.full_path_of_current_orgbox_image,
+                        self.full_path_of_current_original_image,
+                        self.full_path_of_current_csv,
+                        (
+                                str(self.correct.index[idx])
+                                +
+                                ' -> '
+                                +
+                                ': '.join(
+                                    repr(self.correct.iloc[idx]).replace('\n', ' ').split()
+                                )
+                        ),
+                        'The box in this row may have a wrong shape leading to a box of the shape of %s.' % str(
+                            img.shape)
+                    )
+                )
+                continue
+
+            if len(np.unique(img)) <= 1:
+                print(
+                    '===========\n'
+                    '%s\n%s\n%s\n%s\n%s\n'
+                    '===========\n' %
+                    (
+                        self.full_path_of_current_orgbox_image,
+                        self.full_path_of_current_original_image,
+                        self.full_path_of_current_csv,
+                        (
+                                str(self.correct.index[idx])
+                                +
+                                ' -> '
+                                +
+                                ': '.join(
+                                    repr(self.correct.iloc[idx]).replace('\n', '; ').split()
+                                )
+                        ),
+                        'The box in this row may contain nothing.'
+                    )
+                )
+                continue
+
+            img_list.append(img)
+            label_list.append(label)
+        return img_list, label_list
+
+    def split_sub_folder(self, sub_folder_idx):
+        sub_folder_img_list = list()
+        sub_folder_label_list = list()
+        self.get_sub_folder(sub_folder_idx)
+        for idx in range(self.total_n_of_orgbox_images_and_csvs()):
+            img_list, label_list = self.split_all_correct_boxes(idx)
+            sub_folder_img_list.extend(img_list)
+            sub_folder_label_list.extend(label_list)
+        return sub_folder_img_list, sub_folder_label_list
+
+    def split_all_sub_folders(self, max_height=64, pad_zeros=True):
+        all_img_list = list()
+        all_label_list = list()
+        for idx in tqdm(range(len(self.sub_folders))):
+            sub_folder_img_list, sub_folder_label_list = self.split_sub_folder(idx)
+            all_img_list.extend(sub_folder_img_list)
+            all_label_list.extend(sub_folder_label_list)
+
+        all_img_array = np.array(all_img_list)
+        all_label_array = np.array(all_label_list)
+
+        label_checker = np.vectorize(
+            lambda x: (
+                    ('\n' not in x)
+                    and
+                    ('\r' not in x)
+                    and
+                    ('é' not in x)
+                    and
+                    ('¢' not in x)
+                    and
+                    ('«' not in x)
+                    and
+                    ('§' not in x)
+                    and
+                    ('«' not in x)
+                    and
+                    (len(x) > 1)
+            )
+        )
+
+        img_checker = np.vectorize(
+            lambda x: (
+                    (x.shape[1] <= 450)
+                    and
+                    (x.shape[0] >= 32)
+                    and
+                    (x.shape[0] <= max_height)
+            )
+        )
+
+        selected_img_array = all_img_array[
+            img_checker(all_img_array)
+            &
+            label_checker(all_label_array)
+        ]
+        selected_label_array = all_label_array[
+            img_checker(all_img_array)
+            &
+            label_checker(all_label_array)
+        ]
+
+        for idx in range(len(selected_img_array)):
+            height, width, _ = selected_img_array[idx].shape
+            selected_img_array[idx] = cv2.resize(
+                selected_img_array[idx],
+                None,
+                fx=max_height/height,
+                fy=max_height/height
+            )
+
+        # label_len = np.vectorize(lambda x: len(x))(selected_label_array)
+        # img_len = np.vectorize(lambda x: x.shape[1])(selected_img_array)
+        # too_short_checker = (32 < (img_len / 16.0))
+        #
+        # selected_img_array = selected_img_array[too_short_checker]
+        # selected_label_array = selected_label_array[too_short_checker]
+
+        max_width = np.max(
+            [
+                item.shape[1]
+                for item in selected_img_array
+            ]
+        )
+
+        if pad_zeros:
+            for idx in range(len(selected_img_array)):
+                _, width, _ = selected_img_array[idx].shape
+                selected_img_array[idx] = cv2.copyMakeBorder(
+                    selected_img_array[idx],
+                    0,
+                    0,
+                    0,
+                    max_width - width, cv2.BORDER_CONSTANT,
+                    value=[255, 255, 255]
+                )
+
+        all_characters = set()
+        for label in selected_label_array:
+            all_characters.update(
+                [item for item in label]
+            )
+        all_characters = [
+            item.encode('utf8') for item in all_characters
+        ]
+
+        if not os.path.exists('./processed_data'):
+            os.mkdir('./processed_data')
+
+        utf8_encoder = np.vectorize(
+            lambda x: x.encode('utf8')
+        )
+
+        with h5py.File('./processed_data/words.h5', 'w') as handle:
+            handle.create_dataset(
+                'characters',
+                data=np.array(all_characters)
+            )
+            handle.create_dataset(
+                'n_imgs',
+                data=len(selected_label_array)
+            )
+            handle.create_dataset(
+                'labels',
+                data=utf8_encoder(selected_label_array)
+            )
+            for idx, img in enumerate(selected_img_array):
+                handle.create_dataset(
+                    str(idx),
+                    data=img
+                )
+
+
+class WordImgSet(object):
+    def __init__(self, path_to_img_set):
+        """
+
+        ds = WordImgSet('./processed_data/words.h5')
+        ds.save_n_squared_samples_for_all_chars()
+
+        """
+        self.path_to_img_set = os.path.abspath(
+            path_to_img_set
+        )
+        self.data_set = h5py.File(self.path_to_img_set)
+
+    def save_samples(self, idx, vertical_n_per_char=9, horizontal_n_per_char=3, figsize=(18, 12), show_img=False):
+        img_idx_list = list(
+            np.random.choice(
+                self.data_set['n_imgs'].value,
+                min(
+                    [
+                        vertical_n_per_char*horizontal_n_per_char,
+                        self.data_set['n_imgs'].value
+                    ]
+                ),
+                replace=False
+            )
+        )
+
+        fig = plt.figure(figsize=figsize)
+        axes = fig.subplots(nrows=vertical_n_per_char, ncols=horizontal_n_per_char)
+        for row_idx, row in enumerate(axes):
+            for col_idx, ax in enumerate(row):
+                img_idx = img_idx_list[
+                    min(
+                        [
+                            col_idx + row_idx * horizontal_n_per_char,
+                            len(img_idx_list) - 1
+                        ]
+                    )
+                ]
+                img = self.data_set[str(img_idx)].value
+                ax.imshow(img)
+                ax.xaxis.set_ticks([])
+                ax.yaxis.set_ticks([])
+                # ax.axis('off')
+                ax.set_title(
+                    self.data_set['labels'][img_idx]
+                )
+
+        if not os.path.exists('./processed_data'):
+            os.mkdir('./processed_data')
+
+        fig.savefig(
+            './processed_data/samples_%d.png' % idx
+        )
+
+        if show_img:
+            fig.show()
+        return fig
+
+    def save_n_pics_of_samples(self, n_pics=16):
+        for idx in range(n_pics):
+            self.save_samples(idx)
+
+
+class CharDataSet(object):
     # full_path_of_root_folder = 'D:\\datasets\\all_raw_ocr'
     full_path_of_root_folder = 'D:\\datasets\\raw_ocr'
     # sub_folders = (
@@ -202,9 +774,9 @@ class DataSet(object):
                 if self.table is not None:
                     self.correct = self.table[
                         (
-                            self.table['textno'].notnull()
-                            &
-                            self.table['label'].notnull()
+                                self.table['textno'].notnull()
+                                &
+                                self.table['label'].notnull()
                         )
                     ]
                     return len(self.correct)
@@ -224,9 +796,9 @@ class DataSet(object):
             if self.correct is None:
                 self.correct = self.table[
                     (
-                        self.table['textno'].notnull()
-                        &
-                        self.table['label'].notnull()
+                            self.table['textno'].notnull()
+                            &
+                            self.table['label'].notnull()
                     )
                 ]
             left, top, width, height = (
@@ -553,12 +1125,12 @@ class DataSet(object):
 
     def data_augmentation(self, total_n_img_per_class_coef=1.0):
         max_n_img_per_char = int(
-                max(
-                    len(self.total_result[key])
-                    for key in self.total_result
-                )
-                *
-                total_n_img_per_class_coef
+            max(
+                len(self.total_result[key])
+                for key in self.total_result
+            )
+            *
+            total_n_img_per_class_coef
         )
 
         def do(label, current_img_list, max_n_img):
@@ -653,7 +1225,7 @@ class DataSet(object):
         fig.show()
 
 
-class ImgSet(object):
+class CharImgSet(object):
     def __init__(self, path_to_img_set):
         """
 

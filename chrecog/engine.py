@@ -39,6 +39,8 @@ class CharRecogEngine(object):
         self.path_to_saved_model = path
 
         self.graph = None
+        self.config = tf.ConfigProto()
+        self.config.gpu_options.allow_growth = True
         self.sess = None
 
         self.features = None
@@ -52,18 +54,34 @@ class CharRecogEngine(object):
     def load_saved_model(self, path_to_saved_model):
 
         self.path_to_saved_model = path_to_saved_model
-        if 'saved_model.pb' not in os.listdir(self.path_to_saved_model):
+        files_in_folder = os.listdir(self.path_to_saved_model)
+        meta_files = [item for item in files_in_folder if '.meta' in item]
+        pb_files = [item for item in files_in_folder if '.pb' in item]
+        if len(meta_files) + len(pb_files) == 0:
             raise FileNotFoundError(
-                'Cannot find saved_mode.pb in the folder pointed to by %s' %
+                'Cannot find *.pb or *.meta in the folder pointed to by %s' %
                 self.path_to_saved_model
             )
         self.graph = tf.Graph()
-        self.sess = tf.Session(graph=self.graph)
-        tf.saved_model.loader.load(
-            self.sess,
-            [tag_constants.SERVING],
-            self.path_to_saved_model
-        )
+        self.sess = tf.Session(graph=self.graph, config=self.config)
+        if len(pb_files) > 0:
+            tf.saved_model.loader.load(
+                self.sess,
+                [tag_constants.SERVING],
+                self.path_to_saved_model
+            )
+        elif len(meta_files) > 0:
+            with self.graph.as_default():
+                saver = tf.train.import_meta_graph(
+                    os.path.join(
+                        self.path_to_saved_model,
+                        meta_files[0]
+                    )
+                )
+            saver.restore(
+                self.sess,
+                tf.train.latest_checkpoint(self.path_to_saved_model)
+            )
         self.features = self.graph.get_tensor_by_name('features:0')
         self.keep_prob = self.graph.get_tensor_by_name('keep_prob:0')
         self.is_training = self.graph.get_tensor_by_name('is_training:0')
@@ -99,12 +117,25 @@ class CharRecogEngine(object):
                 self.is_training: False
             }
         )
-        labels = np.argsort(logits, -1)
-        labels = labels[:, :, :, ::-1][:, :, :, :top_n]
-        logits = np.sort(logits, -1)
-        logits = logits[:, :, :, ::-1]
-        likelihood = np.exp(logits) / (np.sum(np.exp(logits), axis=-1)[:, :, :, np.newaxis] + 1e-6)
-        likelihood = likelihood[:, :, :, :top_n]
+        if len(logits.shape) == 4:
+            labels = np.argsort(logits, -1)
+            labels = labels[:, :, :, ::-1][:, :, :, :top_n]
+            logits = np.sort(logits, -1)
+            logits = logits[:, :, :, ::-1]
+            likelihood = np.exp(logits) / (np.sum(np.exp(logits), axis=-1)[:, :, :, np.newaxis] + 1e-6)
+            likelihood = likelihood[:, :, :, :top_n]
+        elif len(logits.shape) == 2:
+            labels = np.argsort(logits, -1)
+            labels = labels[:, ::-1][:, :top_n]
+            logits = np.sort(logits, -1)
+            logits = logits[:, ::-1]
+            likelihood = np.exp(logits) / (np.sum(np.exp(logits), axis=-1)[:, np.newaxis] + 1e-6)
+            likelihood = likelihood[:, :top_n]
+        else:
+            raise ValueError(
+                'logits has a shape of (%s). Don\'t know how to deal with it.' %
+                ', '.join([str(item) for item in logits.shape])
+            )
 
         if self.class_idx_to_label_mapper is not None:
             labels = np.vectorize(self.class_idx_to_label_mapper.get)(labels)
@@ -145,15 +176,31 @@ class CharRecogEngine(object):
                 self.is_training: False
             }
         )
-        labels = np.argsort(logits, -1)
-        labels = labels[:, :, :, ::-1][:, :, :, :top_n]
-        logits = np.sort(logits, -1)
-        logits = logits[:, :, :, ::-1]
-        likelihood = (
-                np.exp(logits[:, :, :, :top_n])
-                /
-                (np.sum(np.exp(logits), axis=-1)[:, :, :, np.newaxis] + 1e-8)
-        )
+        if len(logits.shape) == 4:
+            labels = np.argsort(logits, -1)
+            labels = labels[:, :, :, ::-1][:, :, :, :top_n]
+            logits = np.sort(logits, -1)
+            logits = logits[:, :, :, ::-1]
+            likelihood = (
+                    np.exp(logits[:, :, :, :top_n])
+                    /
+                    (np.sum(np.exp(logits), axis=-1)[:, :, :, np.newaxis] + 1e-8)
+            )
+        elif len(logits.shape) == 2:
+            labels = np.argsort(logits, -1)
+            labels = labels[:, ::-1][:, :top_n]
+            logits = np.sort(logits, -1)
+            logits = logits[:, ::-1]
+            likelihood = (
+                    np.exp(logits[:, :top_n])
+                    /
+                    (np.sum(np.exp(logits), axis=-1)[:, np.newaxis] + 1e-8)
+            )
+        else:
+            raise ValueError(
+                'logits has a shape of (%s). Don\'t know how to deal with it.' %
+                ', '.join([str(item) for item in logits.shape])
+            )
 
         if self.class_idx_to_label_mapper is not None:
             labels = np.vectorize(self.class_idx_to_label_mapper.get)(labels)
